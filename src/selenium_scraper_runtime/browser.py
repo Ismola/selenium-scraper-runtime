@@ -206,15 +206,37 @@ def reload_driver(driver, timeout=None):
 
 
 def _owned_processes(driver):
-    """Find only descendants of this driver's local service process."""
+    """Find this driver's process tree, including detached Firefox children."""
+    processes = {}
     try:
         process = driver.service.process
-        if process is None:
-            return []
-        root = psutil.Process(process.pid)
-        return root.children(recursive=True) + [root]
+        if process is not None:
+            root = psutil.Process(process.pid)
+            for item in root.children(recursive=True) + [root]:
+                processes[(item.pid, item.create_time())] = item
+            if os.name == "posix":
+                created = root.create_time()
+                for item in psutil.process_iter(["pid"]):
+                    try:
+                        if (os.getpgid(item.pid) == root.pid
+                                and item.create_time() >= created - 1):
+                            processes[(item.pid, item.create_time())] = item
+                    except (OSError, psutil.Error):
+                        pass
     except (AttributeError, psutil.Error):
-        return []
+        pass
+    try:
+        profile = driver.capabilities.get("moz:profile")
+    except (AttributeError, TypeError):
+        profile = None
+    if profile:
+        for item in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                if profile in (item.info["cmdline"] or []):
+                    processes[(item.pid, item.create_time())] = item
+            except psutil.Error:
+                pass
+    return list(processes.values())
 
 
 def close_driver(driver, timeout=10):
@@ -239,6 +261,9 @@ def close_driver(driver, timeout=10):
         logging.warning("WebDriver quit timed out")
     elif errors:
         logging.warning("WebDriver quit failed: %s", errors[0])
+    # Firefox can reparent a content process while geckodriver exits.
+    processes = list({(item.pid, item.create_time()): item
+                      for item in processes + _owned_processes(driver)}.values())
     if processes:
         try:
             _, alive = psutil.wait_procs(processes, timeout=2)

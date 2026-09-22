@@ -5,6 +5,7 @@ caps the session lifetime so a caller that forgets to close a driver cannot
 leave it running indefinitely.
 """
 
+import os
 import sys
 import time
 
@@ -59,6 +60,14 @@ def supervise(owner_pid, owner_created, service_pid, service_created, max_lifeti
                     known[(process.pid, process.create_time())] = process
             except psutil.Error:
                 pass
+        if os.name == "posix":
+            for process in psutil.process_iter(["pid"]):
+                try:
+                    if (os.getpgid(process.pid) == service_pid
+                            and process.create_time() >= service_created - 1):
+                        known[(process.pid, process.create_time())] = process
+                except (OSError, psutil.Error):
+                    pass
         owner_alive = _same_process(owner_pid, owner_created) is not None
         if not owner_alive or time.monotonic() >= deadline or service is None:
             _stop_processes(known)
