@@ -60,4 +60,5 @@ def init_request_logging(app):
     def clear_run_id(_exception):
         token = getattr(request, "_scraper_run_id_token", None)
         if token is not None:
+            request._scraper_run_id_token = None
             run_id.reset(token)

@@ -21,6 +21,11 @@ def test_json_log_and_request_correlation():
     assert payload["message"] == "hello"
     assert run_id.get() is None
 
+    with app.test_client() as client:
+        client.get("/")
+        client.get("/")
+    assert run_id.get() is None
+
 
 def test_metrics_keep_existing_names():
     app = Flask(__name__)
