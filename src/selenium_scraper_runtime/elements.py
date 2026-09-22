@@ -76,11 +76,13 @@ def click_element(driver, element, max_attempts=3, force_interactable=False):
 
 def _value_matches(element, text):
     value = element.get_attribute("value")
-    return value is None or str(text) in value
+    if value is None:
+        value = element.text
+    return str(text) in value
 
 
 def write_element(driver, element, text, clear=True, slow=False, max_attempts=3,
-                  force_interactable=False):
+                  force_interactable=False, javascript_fallback=True):
     """Type without logging the value, including passwords and other secrets."""
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
@@ -112,6 +114,28 @@ def write_element(driver, element, text, clear=True, slow=False, max_attempts=3,
             except Exception:
                 logging.debug("Could not focus the element for another write attempt")
             time.sleep(0.2)
+    if javascript_fallback and not isinstance(last_error, StaleElementReferenceException):
+        try:
+            driver.execute_script("""
+                const element = arguments[0];
+                const text = arguments[1];
+                const clear = arguments[2];
+                if (element.isContentEditable) {
+                    element.textContent = clear ? text : element.textContent + text;
+                } else {
+                    const value = clear ? text : (element.value || '') + text;
+                    const prototype = Object.getPrototypeOf(element);
+                    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+                    if (setter) setter.call(element, value);
+                    else element.value = value;
+                }
+                element.dispatchEvent(new Event('input', {bubbles: true}));
+                element.dispatchEvent(new Event('change', {bubbles: true}));
+            """, element, text, clear)
+            if _value_matches(element, text):
+                return driver
+        except Exception as error:
+            last_error = error
     raise ElementActionError("Failed to write to element") from last_error
 
 

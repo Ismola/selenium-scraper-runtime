@@ -34,3 +34,12 @@ def test_write_element_does_not_log_secret(caplog):
     assert write_element(driver, element, "secret-password") is driver
     element.send_keys.assert_called_once_with("secret-password")
     assert "secret-password" not in caplog.text
+
+
+def test_write_element_uses_javascript_after_typing_fails():
+    driver = Mock()
+    element = Mock()
+    element.send_keys.side_effect = RuntimeError("input intercepted")
+    element.get_attribute.return_value = "typed"
+    assert write_element(driver, element, "typed", max_attempts=1) is driver
+    assert driver.execute_script.call_count == 2
