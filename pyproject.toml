@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "selenium-scraper-runtime"
+version = "0.1.0"
+description = "Shared logging, metrics, and browser helpers for Selenium scraper services"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Ismola"}]
+dependencies = ["flask>=3,<4", "prometheus-client>=0.20,<1"]
+
+[project.optional-dependencies]
+browser = ["selenium>=4,<5", "webdriver-manager>=4,<5"]
+test = ["pytest>=8,<9"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
