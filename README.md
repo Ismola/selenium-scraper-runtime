@@ -5,13 +5,13 @@ Public Python library and Docker base image for Selenium scraper services.
 ## Install
 
 ```bash
-pip install 'selenium-scraper-runtime[browser] @ git+https://github.com/Ismola/selenium-scraper-runtime.git@v0.2.3'
+pip install 'selenium-scraper-runtime[browser] @ https://github.com/Ismola/selenium-scraper-runtime/archive/refs/heads/main.tar.gz'
 ```
 
-Use `ghcr.io/ismola/selenium-scraper-runtime:v0.2.3` as the Docker base image. Pin a released tag in each scraper and update it through its test pipeline. The image supplies Python 3.10, Chromium with its matching driver, Firefox, fonts, a non-root user, and the Python package. Keep scraper-specific dependencies in the consuming repository.
+Use `ghcr.io/ismola/selenium-scraper-runtime:latest` as the Docker base image. Consumer projects install the Python package from `main`, so rebuilding them picks up the current shared runtime. The image supplies Python 3.10, Chromium with its matching driver, Firefox, fonts, a non-root user, and the Python package. Keep scraper-specific dependencies in the consuming repository.
 
 ```dockerfile
-FROM ghcr.io/ismola/selenium-scraper-runtime:v0.2.3
+FROM ghcr.io/ismola/selenium-scraper-runtime:latest
 USER root
 COPY --chown=scraper:scraper requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
