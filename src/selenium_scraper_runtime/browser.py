@@ -2,6 +2,7 @@
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -52,9 +53,25 @@ def _headless(value):
     return os.getenv("DOCKERIZED", "").lower() == "true" or not bool(os.getenv("DISPLAY"))
 
 
+def _find_executable(env_name, candidates):
+    """Resolve an explicit executable or the first installed candidate."""
+    configured = os.getenv(env_name)
+    if configured:
+        resolved = shutil.which(configured) if os.path.sep not in configured else configured
+        if resolved and os.path.isfile(resolved) and os.access(resolved, os.X_OK):
+            return resolved
+        raise FileNotFoundError(f"{env_name} does not point to an executable: {configured}")
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
 def create_driver(
     browser="chrome", download_dir=None, remote_url=None, headless=None,
     language=None, stealth=None, user_agent=None, extra_arguments=(),
+    binary=None, driver_path=None,
 ):
     """Start one browser with container defaults and overridable site settings."""
     remote_url = remote_url or os.getenv("SELENIUM_URL")
@@ -65,33 +82,50 @@ def create_driver(
 
     if browser == "chrome":
         options = webdriver.ChromeOptions()
-        binary = os.getenv("CHROME_BIN", "/usr/bin/chromium")
-        if os.path.exists(binary):
+        if binary is None and not remote_url:
+            binary = _find_executable(
+                "CHROME_BIN",
+                ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome"),
+            )
+        if binary:
             options.binary_location = binary
-        if _headless(headless):
+            logging.info("Using Chrome-compatible browser: %s", binary)
+        is_headless = _headless(headless)
+        if is_headless:
             options.add_argument("--headless=new")
         for argument in (
             "--no-sandbox", "--disable-dev-shm-usage", "--disable-notifications",
-            "--disable-extensions", "--no-first-run", "--window-size=1920,1080",
+            "--disable-extensions", "--no-first-run", "--no-default-browser-check",
+            "--disable-popup-blocking", "--password-store=basic", "--window-size=1920,1080",
             *extra_arguments,
         ):
             options.add_argument(argument)
+        if not is_headless:
+            options.add_argument("--start-maximized")
+        if stealth:
+            options.add_argument("--disable-blink-features=AutomationControlled")
         if user_agent:
             options.add_argument(f"--user-agent={user_agent}")
+        options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
             "plugins.always_open_pdf_externally": True,
             "intl.accept_languages": language,
+            "profile.default_content_setting_values.notifications": 2,
+            "profile.password_manager_enabled": False,
+            "credentials_enable_service": False,
         })
         if remote_url:
             driver = webdriver.Remote(command_executor=remote_url, options=options,
                                      client_config=ClientConfig(remote_server_addr=remote_url,
                                                                timeout=_command_timeout()))
         else:
-            path = "/usr/bin/chromedriver" if os.path.exists("/usr/bin/chromedriver") else None
-            service = _ChromeService(path, popen_kw={"start_new_session": True} if os.name == "posix" else {})
+            driver_path = driver_path or _find_executable("CHROMEDRIVER_BIN", ("chromedriver",))
+            if driver_path:
+                logging.info("Using ChromeDriver: %s", driver_path)
+            service = _ChromeService(driver_path, popen_kw={"start_new_session": True} if os.name == "posix" else {})
             driver = webdriver.Chrome(service=service, options=options)
         _prepare_driver(driver)
         if stealth:
@@ -107,8 +141,9 @@ def create_driver(
 
     if browser == "firefox":
         options = webdriver.FirefoxOptions()
-        binary = os.getenv("FIREFOX_BIN", "/usr/bin/firefox-esr")
-        if os.path.exists(binary):
+        if binary is None and not remote_url:
+            binary = _find_executable("FIREFOX_BIN", ("firefox-esr", "firefox"))
+        if binary:
             options.binary_location = binary
         if _headless(headless):
             options.add_argument("-headless")
@@ -121,8 +156,8 @@ def create_driver(
                                      client_config=ClientConfig(remote_server_addr=remote_url,
                                                                timeout=_command_timeout()))
         else:
-            path = "/usr/bin/geckodriver" if os.path.exists("/usr/bin/geckodriver") else None
-            service = _FirefoxService(path, popen_kw={"start_new_session": True} if os.name == "posix" else {})
+            driver_path = driver_path or _find_executable("GECKODRIVER_BIN", ("geckodriver",))
+            service = _FirefoxService(driver_path, popen_kw={"start_new_session": True} if os.name == "posix" else {})
             driver = webdriver.Firefox(service=service, options=options)
         return _prepare_driver(driver)
 

@@ -10,6 +10,39 @@ from selenium_scraper_runtime import browser
 from selenium_scraper_runtime.watchdog import supervise
 
 
+def test_local_chrome_detects_google_chrome_and_matching_driver(monkeypatch):
+    paths = {
+        "google-chrome-stable": "/usr/bin/google-chrome-stable",
+        "chromedriver": "/usr/local/bin/chromedriver",
+    }
+    monkeypatch.delenv("CHROME_BIN", raising=False)
+    monkeypatch.delenv("CHROMEDRIVER_BIN", raising=False)
+    monkeypatch.setattr(browser.shutil, "which", lambda name: paths.get(name))
+    monkeypatch.setattr(browser, "_prepare_driver", lambda driver: driver)
+    service_factory = Mock(return_value=object())
+    monkeypatch.setattr(browser, "_ChromeService", service_factory)
+    driver = Mock()
+    chrome_factory = Mock(return_value=driver)
+    monkeypatch.setattr(browser.webdriver, "Chrome", chrome_factory)
+
+    assert browser.create_driver("chrome", headless=False, stealth=False) is driver
+
+    options = chrome_factory.call_args.kwargs["options"]
+    assert options.binary_location == "/usr/bin/google-chrome-stable"
+    assert "--start-maximized" in options.arguments
+    service_factory.assert_called_once_with(
+        "/usr/local/bin/chromedriver",
+        popen_kw={"start_new_session": True} if os.name == "posix" else {},
+    )
+
+
+def test_invalid_explicit_chrome_binary_fails_clearly(monkeypatch):
+    monkeypatch.setenv("CHROME_BIN", "/missing/google-chrome")
+
+    with pytest.raises(FileNotFoundError, match="CHROME_BIN"):
+        browser.create_driver("chrome", headless=False)
+
+
 def test_navigation_failure_closes_its_driver(monkeypatch):
     driver = Mock()
     driver.get.side_effect = RuntimeError("navigation failed")
