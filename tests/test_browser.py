@@ -36,6 +36,45 @@ def test_local_chrome_detects_google_chrome_and_matching_driver(monkeypatch):
     )
 
 
+def test_visible_chrome_uses_stable_vscode_display_backend(monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "vscode-wayland-123.sock")
+    monkeypatch.delenv("CHROME_OZONE_PLATFORM", raising=False)
+    monkeypatch.delenv("CHROME_DISABLE_GPU", raising=False)
+    monkeypatch.setattr(browser, "_find_executable", lambda *_: "/usr/bin/chromium")
+    monkeypatch.setattr(browser, "_prepare_driver", lambda driver: driver)
+    monkeypatch.setattr(browser, "_ChromeService", Mock(return_value=object()))
+    chrome_factory = Mock(return_value=Mock())
+    monkeypatch.setattr(browser.webdriver, "Chrome", chrome_factory)
+
+    browser.create_driver("chrome", headless=False, stealth=False)
+
+    arguments = chrome_factory.call_args.kwargs["options"].arguments
+    assert "--ozone-platform=x11" in arguments
+    assert "--disable-gpu" in arguments
+
+
+def test_explicit_visible_chrome_graphics_options_take_precedence(monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "vscode-wayland-123.sock")
+    monkeypatch.setenv("CHROME_DISABLE_GPU", "false")
+    monkeypatch.setattr(browser, "_find_executable", lambda *_: "/usr/bin/chromium")
+    monkeypatch.setattr(browser, "_prepare_driver", lambda driver: driver)
+    monkeypatch.setattr(browser, "_ChromeService", Mock(return_value=object()))
+    chrome_factory = Mock(return_value=Mock())
+    monkeypatch.setattr(browser.webdriver, "Chrome", chrome_factory)
+
+    browser.create_driver(
+        "chrome", headless=False, stealth=False,
+        extra_arguments=("--ozone-platform=wayland",),
+    )
+
+    arguments = chrome_factory.call_args.kwargs["options"].arguments
+    assert "--ozone-platform=wayland" in arguments
+    assert "--ozone-platform=x11" not in arguments
+    assert "--disable-gpu" not in arguments
+
+
 def test_invalid_explicit_chrome_binary_fails_clearly(monkeypatch):
     monkeypatch.setenv("CHROME_BIN", "/missing/google-chrome")
 

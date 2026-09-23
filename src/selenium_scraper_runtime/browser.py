@@ -68,6 +68,27 @@ def _find_executable(env_name, candidates):
     return None
 
 
+def _visible_chrome_arguments(is_headless, extra_arguments):
+    """Choose a deterministic display backend for visible container sessions."""
+    if is_headless:
+        return []
+    arguments = []
+    if os.getenv("DISPLAY") and not any(
+        argument.startswith("--ozone-platform=") for argument in extra_arguments
+    ):
+        arguments.append(f"--ozone-platform={os.getenv('CHROME_OZONE_PLATFORM', 'x11')}")
+    disable_gpu = os.getenv("CHROME_DISABLE_GPU")
+    if disable_gpu is None:
+        # VS Code forwards a Wayland socket which Chromium cannot use reliably
+        # from these containers. Software rendering avoids Xwayland GPU glitches.
+        disable_gpu = os.getenv("WAYLAND_DISPLAY", "").startswith("vscode-wayland-")
+    else:
+        disable_gpu = disable_gpu.lower() in {"true", "1", "yes"}
+    if disable_gpu and "--disable-gpu" not in extra_arguments:
+        arguments.append("--disable-gpu")
+    return arguments
+
+
 def create_driver(
     browser="chrome", download_dir=None, remote_url=None, headless=None,
     language=None, stealth=None, user_agent=None, extra_arguments=(),
@@ -93,10 +114,12 @@ def create_driver(
         is_headless = _headless(headless)
         if is_headless:
             options.add_argument("--headless=new")
+        visible_arguments = _visible_chrome_arguments(is_headless, extra_arguments)
         for argument in (
             "--no-sandbox", "--disable-dev-shm-usage", "--disable-notifications",
             "--disable-extensions", "--no-first-run", "--no-default-browser-check",
             "--disable-popup-blocking", "--password-store=basic", "--window-size=1920,1080",
+            *visible_arguments,
             *extra_arguments,
         ):
             options.add_argument(argument)
