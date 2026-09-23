@@ -1,4 +1,7 @@
 name: Release
+concurrency:
+  group: runtime-release-${{ github.ref }}
+  cancel-in-progress: true
 on:
   push:
     branches: [main]

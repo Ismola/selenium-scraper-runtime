@@ -7,6 +7,16 @@ from flask import g, request
 from prometheus_client import Counter, Gauge, Histogram
 
 
+def _ensure_multiprocess_directory():
+    """Create Prometheus' temporary directory when the container cleared /tmp."""
+    path = os.getenv("PROMETHEUS_MULTIPROC_DIR")
+    if path:
+        os.makedirs(path, exist_ok=True)
+
+
+_ensure_multiprocess_directory()
+
+
 SERVICE_NAME = os.getenv("SCRAPER_SERVICE_NAME", "selenium-scraper-quickstarter")
 
 HTTP_REQUESTS = Counter(
