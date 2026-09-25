@@ -60,11 +60,22 @@ HTTP_LAST_SUCCESS = Gauge(
     ("service",),
     multiprocess_mode="livemax",
 )
+HTTP_LAST_ERROR = Gauge(
+    "scraper_http_last_error_timestamp_seconds",
+    "Unix timestamp of the last failed HTTP request, including its error message.",
+    ("service", "endpoint", "error"),
+    multiprocess_mode="livemax",
+)
 
 TASK_RUNS = Counter(
     "scraper_task_runs_total",
     "Total scraper task executions, including scheduled and internal work.",
     ("service", "task", "outcome"),
+)
+TASK_STARTS = Counter(
+    "scraper_task_starts_total",
+    "Total scraper task starts, including long-running scheduled work.",
+    ("service", "task"),
 )
 TASK_DURATION = Histogram(
     "scraper_task_duration_seconds",
@@ -84,24 +95,58 @@ TASK_LAST_RUN = Gauge(
     ("service", "task", "outcome"),
     multiprocess_mode="livemax",
 )
+TASK_LAST_START = Gauge(
+    "scraper_task_last_start_timestamp_seconds",
+    "Unix timestamp of the last scraper task start.",
+    ("service", "task"),
+    multiprocess_mode="livemax",
+)
 TASK_LAST_SUCCESS = Gauge(
     "scraper_task_last_success_timestamp_seconds",
     "Unix timestamp of the last successful scraper task completion.",
     ("service", "task"),
     multiprocess_mode="livemax",
 )
+TASK_LAST_ERROR = Gauge(
+    "scraper_task_last_error_timestamp_seconds",
+    "Unix timestamp of the last failed scraper task, including its error message.",
+    ("service", "task", "error"),
+    multiprocess_mode="livemax",
+)
+
+
+def _metric_error_message(error):
+    """Return a useful, bounded label value for alert notifications."""
+    message = " ".join(str(error).split())
+    if not message:
+        message = error.__class__.__name__
+    return message[:1000]
+
+
+class TaskSkipped(Exception):
+    """Signal that a scheduled task was intentionally not executed."""
 
 
 @contextmanager
 def track_task(task):
     """Track scheduled or internal work that does not pass through Flask."""
     started = time.monotonic()
+    started_at = time.time()
     outcome = "success"
+    TASK_STARTS.labels(service=SERVICE_NAME, task=task).inc()
+    TASK_LAST_START.labels(service=SERVICE_NAME, task=task).set(started_at)
     TASKS_IN_PROGRESS.labels(service=SERVICE_NAME, task=task).inc()
     try:
         yield
-    except BaseException:
+    except TaskSkipped:
+        outcome = "skipped"
+    except BaseException as error:
         outcome = "error"
+        TASK_LAST_ERROR.labels(
+            service=SERVICE_NAME,
+            task=task,
+            error=_metric_error_message(error),
+        ).set(time.time())
         raise
     finally:
         finished_at = time.time()
@@ -156,6 +201,14 @@ def init_metrics(app):
         HTTP_LAST_REQUEST.labels(service=SERVICE_NAME, outcome=outcome).set(finished_at)
         if outcome == "success":
             HTTP_LAST_SUCCESS.labels(service=SERVICE_NAME).set(finished_at)
+        else:
+            payload = response.get_json(silent=True)
+            error = payload.get("message") or payload.get("error") if isinstance(payload, dict) else None
+            HTTP_LAST_ERROR.labels(
+                service=SERVICE_NAME,
+                endpoint=endpoint,
+                error=_metric_error_message(error or response.status),
+            ).set(finished_at)
         if start_time is not None:
             HTTP_REQUEST_DURATION.labels(
                 service=SERVICE_NAME,

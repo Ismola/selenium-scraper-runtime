@@ -3,7 +3,7 @@ import logging
 
 from flask import Flask
 from selenium_scraper_runtime.logging import JsonFormatter, init_request_logging, run_id
-from selenium_scraper_runtime.metrics import init_metrics, track_task
+from selenium_scraper_runtime.metrics import TaskSkipped, init_metrics, track_task
 
 
 def test_json_log_and_request_correlation():
@@ -34,3 +34,8 @@ def test_metrics_keep_existing_names():
     assert app.test_client().get("/").status_code == 200
     with track_task("example"):
         pass
+
+
+def test_skipped_task_is_recorded_without_failing_the_scheduler():
+    with track_task("outside_schedule"):
+        raise TaskSkipped
