@@ -1,3 +1,4 @@
+import errno
 import os
 import subprocess
 import sys
@@ -109,6 +110,28 @@ def test_close_driver_ends_its_own_process_only(monkeypatch):
             if process.poll() is None:
                 process.kill()
             process.wait()
+
+
+def test_close_driver_does_not_require_pidfd(monkeypatch):
+    owned = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        driver = Mock()
+        driver.quit.side_effect = RuntimeError("browser unresponsive")
+        monkeypatch.setattr(browser, "_owned_processes", lambda _: [psutil.Process(owned.pid)])
+        if hasattr(os, "pidfd_open"):
+            monkeypatch.setattr(
+                os,
+                "pidfd_open",
+                lambda *_: (_ for _ in ()).throw(OSError(errno.EINVAL, "Invalid argument")),
+            )
+
+        browser.close_driver(driver, timeout=0.1)
+
+        owned.wait(timeout=5)
+    finally:
+        if owned.poll() is None:
+            owned.kill()
+        owned.wait()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="The browser watchdog runs on POSIX")

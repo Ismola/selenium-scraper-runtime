@@ -18,6 +18,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as conditions
 from selenium.webdriver.remote.client_config import ClientConfig
 
+from .processes import stop_processes, wait_for_processes
+
 
 _active_drivers = weakref.WeakSet()
 _registry_lock = threading.Lock()
@@ -320,24 +322,23 @@ def close_driver(driver, timeout=10):
     elif errors:
         logging.warning("WebDriver quit failed: %s", errors[0])
     # Firefox can reparent a content process while geckodriver exits.
-    processes = list({(item.pid, item.create_time()): item
-                      for item in processes + _owned_processes(driver)}.values())
+    owned = {}
+    for item in processes + _owned_processes(driver):
+        try:
+            owned[(item.pid, item.create_time())] = item
+        except (OSError, psutil.Error):
+            pass
+    processes = list(owned.values())
     if processes:
         try:
-            _, alive = psutil.wait_procs(processes, timeout=2)
-            for process in alive:
-                try:
-                    process.terminate()
-                except psutil.Error:
-                    pass
-            _, alive = psutil.wait_procs(alive, timeout=2)
-            for process in alive:
-                try:
-                    process.kill()
-                except psutil.Error:
-                    pass
-            psutil.wait_procs(alive, timeout=2)
-        except psutil.Error as error:
+            alive = wait_for_processes(processes, timeout=2)
+            alive = stop_processes(alive)
+            if alive:
+                logging.warning(
+                    "Could not stop browser processes: %s",
+                    ", ".join(str(process.pid) for process in alive),
+                )
+        except (OSError, psutil.Error) as error:
             logging.warning("Could not inspect the browser process tree: %s", error)
     thread.join(timeout=2)
     watchdog = getattr(driver, "_scraper_watchdog", None)

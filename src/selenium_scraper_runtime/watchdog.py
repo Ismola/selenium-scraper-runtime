@@ -11,6 +11,8 @@ import time
 
 import psutil
 
+from .processes import stop_processes
+
 
 def _same_process(pid, created):
     try:
@@ -23,25 +25,7 @@ def _same_process(pid, created):
 
 
 def _stop_processes(processes):
-    alive = []
-    for process in processes.values():
-        try:
-            if process.is_running():
-                alive.append(process)
-        except psutil.Error:
-            pass
-    for process in alive:
-        try:
-            process.terminate()
-        except psutil.Error:
-            pass
-    _, alive = psutil.wait_procs(alive, timeout=2)
-    for process in alive:
-        try:
-            process.kill()
-        except psutil.Error:
-            pass
-    psutil.wait_procs(alive, timeout=2)
+    stop_processes(processes.values())
 
 
 def supervise(owner_pid, owner_created, service_pid, service_created, max_lifetime,
