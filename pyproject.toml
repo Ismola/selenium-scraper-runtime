@@ -15,7 +15,7 @@ dependencies = ["flask>=3,<4", "prometheus-client>=0.20,<1"]
 
 [project.optional-dependencies]
 browser = ["selenium>=4.33,<5", "psutil>=5.9,<8", "selenium-stealth>=1,<2"]
-test = ["pytest>=8,<9"]
+test = ["pytest>=8,<10"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
