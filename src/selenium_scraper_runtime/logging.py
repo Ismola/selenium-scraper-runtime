@@ -4,13 +4,60 @@ import contextvars
 import json
 import logging
 import os
+import re
 import sys
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 
 from flask import request
 
 run_id = contextvars.ContextVar("scraper_run_id", default=None)
+
+_SENSITIVE_KEY_PARTS = (
+    "password",
+    "pasword",
+    "passwd",
+    "passphrase",
+    "passcode",
+    "pwd",
+    "contrasena",
+    "secret",
+    "token",
+    "apikey",
+    "accesskey",
+    "privatekey",
+    "authorization",
+    "credential",
+    "cookie",
+    "sessionkey",
+    "totp",
+)
+
+
+def _normalized_key(key):
+    decomposed = unicodedata.normalize("NFKD", str(key)).casefold()
+    without_accents = "".join(
+        character for character in decomposed
+        if not unicodedata.combining(character)
+    )
+    return re.sub(r"[^a-z0-9]", "", without_accents)
+
+
+def _redact_sensitive_fields(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            normalized_key = _normalized_key(key)
+            is_sensitive = (
+                "pass" in normalized_key
+                or any(part in normalized_key for part in _SENSITIVE_KEY_PARTS)
+            )
+            redacted[key] = "[REDACTED]" if is_sensitive else _redact_sensitive_fields(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive_fields(item) for item in value]
+    return value
 
 
 class JsonFormatter(logging.Formatter):
@@ -43,13 +90,25 @@ def configure_logging(level=None):
     root.addHandler(handler)
 
 
-def init_request_logging(app):
-    """Add a request ID to logs without changing response bodies."""
+def init_request_logging(app, log_json_body=False):
+    """Add request IDs and optionally log redacted JSON request bodies."""
     configure_logging()
 
     @app.before_request
     def set_run_id():
         request._scraper_run_id_token = run_id.set(uuid.uuid4().hex)
+        if log_json_body and request.is_json:
+            body = request.get_json(silent=True)
+            logging.info(
+                "Incoming request body method=%s path=%s body=%s",
+                request.method,
+                request.path,
+                json.dumps(
+                    _redact_sensitive_fields(body),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
 
     @app.after_request
     def add_run_id_header(response):

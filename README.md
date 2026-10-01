@@ -25,7 +25,7 @@ ENTRYPOINT ["/app/docker-entrypoint.sh"]
 ```python
 from selenium_scraper_runtime import init_metrics, init_request_logging, track_task
 
-init_request_logging(app)
+init_request_logging(app, log_json_body=True)
 init_metrics(app)
 with track_task("download_documents"):
     run_scraper()
@@ -33,7 +33,7 @@ with track_task("download_documents"):
 
 Application logs are JSON lines on stdout. Docker exposes them to Alloy; Alloy writes them to Loki for Grafana. `X-Run-ID` also appears in every HTTP response for correlation. The library preserves existing `scraper_*` Prometheus metric names and labels.
 
-The first rollout is limited to Starnaliza scrapers. Other scraper services can migrate after the quickstarter and its Siryus fork pass their test suites.
+With `log_json_body=True`, each JSON request body is logged at INFO level. Sensitive values are recursively replaced with `[REDACTED]` when their field names contain terms such as `password`, `passwd`, `pwd`, `contraseña`, `secret`, `token`, `authorization`, `credential`, or `cookie`. Non-JSON request bodies are not logged.
 
 ## Browser and element helpers
 
