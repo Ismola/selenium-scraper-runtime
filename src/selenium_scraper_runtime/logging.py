@@ -32,6 +32,11 @@ _SENSITIVE_KEY_PARTS = (
     "cookie",
     "sessionkey",
     "totp",
+    "username",
+    "usuario",
+    "email",
+    "login",
+    "user",
 )
 
 
