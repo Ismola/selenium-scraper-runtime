@@ -33,7 +33,7 @@ with track_task("download_documents"):
 
 Application logs are JSON lines on stdout. Docker exposes them to Alloy; Alloy writes them to Loki for Grafana. `X-Run-ID` also appears in every HTTP response for correlation. The library preserves existing `scraper_*` Prometheus metric names and labels.
 
-With `log_json_body=True`, each JSON request body is logged at INFO level. Sensitive values are recursively replaced with `[REDACTED]` when their field names contain terms such as `password`, `passwd`, `pwd`, `contraseña`, `username`, `usuario`, `email`, `login`, `secret`, `token`, `authorization`, `credential`, or `cookie`. Non-JSON request bodies are not logged.
+JSON request bodies are checked for a `username` or `usuario` field and that value is logged at INFO level for request correlation. With `log_json_body=True`, the complete JSON body is also logged. Passwords and other sensitive values are recursively replaced with `[REDACTED]` when their field names contain terms such as `password`, `passwd`, `pwd`, `contraseña`, `email`, `login`, `secret`, `token`, `authorization`, `credential`, or `cookie`. Username fields are retained; generic `user` and `login` fields remain redacted. Non-JSON request bodies are not logged.
 
 ## Browser and element helpers
 

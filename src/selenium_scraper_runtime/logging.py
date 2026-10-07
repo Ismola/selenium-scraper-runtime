@@ -32,12 +32,12 @@ _SENSITIVE_KEY_PARTS = (
     "cookie",
     "sessionkey",
     "totp",
-    "username",
-    "usuario",
     "email",
     "login",
     "user",
 )
+
+_USERNAME_KEY_NAMES = frozenset({"username", "usuario"})
 
 
 def _normalized_key(key):
@@ -55,14 +55,35 @@ def _redact_sensitive_fields(value):
         for key, item in value.items():
             normalized_key = _normalized_key(key)
             is_sensitive = (
-                "pass" in normalized_key
-                or any(part in normalized_key for part in _SENSITIVE_KEY_PARTS)
+                normalized_key not in _USERNAME_KEY_NAMES
+                and (
+                    "pass" in normalized_key
+                    or any(part in normalized_key for part in _SENSITIVE_KEY_PARTS)
+                )
             )
             redacted[key] = "[REDACTED]" if is_sensitive else _redact_sensitive_fields(item)
         return redacted
     if isinstance(value, list):
         return [_redact_sensitive_fields(item) for item in value]
     return value
+
+
+def _find_username(value):
+    """Return the first username field in a JSON request body, if present."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _normalized_key(key) in _USERNAME_KEY_NAMES:
+                return item
+        for item in value.values():
+            username = _find_username(item)
+            if username is not None:
+                return username
+    elif isinstance(value, list):
+        for item in value:
+            username = _find_username(item)
+            if username is not None:
+                return username
+    return None
 
 
 class JsonFormatter(logging.Formatter):
@@ -114,6 +135,17 @@ def init_request_logging(app, log_json_body=False):
                     separators=(",", ":"),
                 ),
             )
+        elif request.is_json:
+            username = _find_username(request.get_json(silent=True))
+            if username is not None:
+                logging.info(
+                    "Incoming request username=%s",
+                    json.dumps(
+                        _redact_sensitive_fields(username),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
 
     @app.after_request
     def add_run_id_header(response):
