@@ -100,6 +100,12 @@ class JsonFormatter(logging.Formatter):
             event["run_id"] = correlation
         if record.exc_info:
             event["exception"] = self.formatException(record.exc_info)
+        from .diagnostics import current_report
+        report = current_report.get()
+        if report is not None:
+            event["message"] = report.redact(event["message"])
+            if "exception" in event:
+                event["exception"] = report.redact(event["exception"])
         return json.dumps(event, ensure_ascii=False)
 
 
@@ -116,13 +122,19 @@ def configure_logging(level=None):
     root.addHandler(handler)
 
 
-def init_request_logging(app, log_json_body=False):
+def init_request_logging(app, log_json_body=False, failure_diagnostics=False, screenshot=None):
     """Add request IDs and optionally log redacted JSON request bodies."""
     configure_logging()
+    if failure_diagnostics:
+        from .diagnostics import configure_diagnostics
+        configure_diagnostics()
 
     @app.before_request
     def set_run_id():
         request._scraper_run_id_token = run_id.set(uuid.uuid4().hex)
+        if failure_diagnostics:
+            from .diagnostics import begin_request
+            begin_request(run_id.get(), screenshot)
         if log_json_body and request.is_json:
             body = request.get_json(silent=True)
             logging.info(
@@ -150,10 +162,16 @@ def init_request_logging(app, log_json_body=False):
     @app.after_request
     def add_run_id_header(response):
         response.headers["X-Run-ID"] = run_id.get()
+        if failure_diagnostics:
+            from .diagnostics import finish_request
+            finish_request(response)
         return response
 
     @app.teardown_request
     def clear_run_id(_exception):
+        if failure_diagnostics:
+            from .diagnostics import clear_request
+            clear_request(_exception)
         token = getattr(request, "_scraper_run_id_token", None)
         if token is not None:
             request._scraper_run_id_token = None

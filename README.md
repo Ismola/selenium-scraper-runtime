@@ -54,3 +54,42 @@ with browser_session(url="https://example.com/login") as driver:
 For local development the runtime detects `chromium`, `chromium-browser`, `google-chrome-stable`, or `google-chrome`, in that order. `CHROME_BIN` and `CHROMEDRIVER_BIN` can select explicit executables. Devcontainers should use this runtime image and set `DOCKERIZED=false` so `HEADLESS_MODE=auto` can display browser windows.
 
 The library sets finite WebDriver command, page, and script timeouts (60, 60, and 30 seconds by default). `close_driver` quits the session and terminates only its surviving local process tree. A separate guard notices worker crashes and caps each local session at `WEBDRIVER_MAX_LIFETIME` (720 seconds by default); increase this value for legitimate longer jobs. Use `browser_session` or a `try/finally` block so normal work closes promptly. `WEBDRIVER_COMMAND_TIMEOUT`, `PAGE_LOAD_TIMEOUT`, and `SCRIPT_TIMEOUT` override the other limits.
+
+## Failure reports shared by scrapers
+
+Opt in without changing API response bodies:
+
+```python
+from selenium_scraper_runtime.logging import init_request_logging
+from selenium_scraper_runtime.diagnostics import capture_failure
+
+init_request_logging(app, log_json_body=True, failure_diagnostics=True)
+# In each controller, inside except and BEFORE closing its browser:
+# capture_failure(driver)
+```
+
+Set `REQUEST_DIAGNOSTICS_DIR` to a persistent spool shared with one worker running
+`python -m selenium_scraper_runtime.notifications` from this same image.
+An existing screenshot helper can be passed as `screenshot=take_screenshot` to
+`init_request_logging`; it must accept `directory` and return a PNG path there.
+The shared `diagnostics.take_screenshot` preserves that signature.
+
+Every failed HTTP response (400–599) queues its own report using the generated
+`X-Run-ID`. The email includes all application log records emitted at the configured
+log level during that request, traceback, HTTP context, an inline browser screenshot,
+and a complete `.log` attachment. Request credentials are redacted. Successful
+requests discard their evidence. Requests that fail before a browser starts or with
+an unresponsive browser still send logs and explain why a screenshot is unavailable.
+`get_page` navigation failures and `browser_session` also capture before cleanup.
+
+Worker configuration: `SCRAPER_SMTP_HOST`, `SCRAPER_SMTP_PORT` (465),
+`SCRAPER_SMTP_SECURITY` (`ssl`, `starttls`, or `plain` for local tests),
+`SCRAPER_SMTP_USER`, `SCRAPER_SMTP_PASSWORD`, `SCRAPER_ALERT_FROM`, and
+comma-separated `SCRAPER_ALERT_TO`. Keep credentials in deployment secrets.
+The worker takes a spool lock, retries with exponential backoff, and marks reports
+sent only after SMTP accepts them. Delivery is at least once: a crash after SMTP
+acceptance can resend, with the same Message-ID. No pending report is removed by
+retention; sent and abandoned evidence expires after
+`REQUEST_DIAGNOSTICS_RETENTION_DAYS` (7). Run the worker under a user that can read
+and update the scraper's private spool. `.heartbeat` is updated each scan; also
+monitor the age of pending reports to detect mail delivery problems.

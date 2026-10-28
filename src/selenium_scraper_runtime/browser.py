@@ -231,6 +231,8 @@ def _prepare_driver(driver):
             _active_drivers.add(driver)
         return driver
     except Exception:
+        from .diagnostics import capture_failure
+        capture_failure(driver)
         close_driver(driver)
         raise
 
@@ -243,6 +245,8 @@ def get_page(browser="chrome", url=None, **driver_options):
         driver.get(url)
         return driver
     except Exception:
+        from .diagnostics import capture_failure
+        capture_failure(driver)
         close_driver(driver)
         raise
 
@@ -367,6 +371,10 @@ def browser_session(browser="chrome", url=None, **driver_options):
     driver = get_page(browser=browser, url=url, **driver_options)
     try:
         yield driver
+    except Exception:
+        from .diagnostics import capture_failure
+        capture_failure(driver)
+        raise
     finally:
         close_driver(driver)
 

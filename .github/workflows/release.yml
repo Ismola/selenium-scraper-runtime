@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install build pytest
-      - run: pip install '.[browser]'
+      - run: pip install '.[browser,test]'
       - run: pytest -q
       - run: python -m build
       - uses: docker/setup-qemu-action@v3
