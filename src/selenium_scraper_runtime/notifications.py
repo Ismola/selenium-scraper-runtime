@@ -28,15 +28,18 @@ def build_message(report_path, sender, recipients):
     message = EmailMessage()
     message["From"] = sender
     message["To"] = ", ".join(recipients)
-    message["Subject"] = f"[ERROR] {report['service']} · {report['method']} {report['path']} · {run_id}"
+    task = report.get("kind") == "task"
+    subject = f"[ERROR] {report['service']} · {report['method']} {report['path']} · {run_id}"
+    message["Subject"] = " ".join(subject.split())
     message["Date"] = formatdate(localtime=False)
     # Stable across retries so receiving systems can detect duplicate deliveries.
     message["Message-ID"] = f"<scraper-{run_id}@{sender.rsplit('@', 1)[-1].rstrip('>')}>"
     message["X-Scraper-Run-ID"] = run_id
     summary = (
         f"Servicio: {report['service']}\n"
-        f"Petición: {report['method']} {report['path']}\n"
-        f"HTTP: {report['status']}\n"
+        + (f"Tarea programada: {report['task']}\nResultado: FALLIDA\n" if task else
+           f"Petición: {report['method']} {report['path']}\nHTTP: {report['status']}\n")
+        +
         f"X-Run-ID: {run_id}\n"
         f"Inicio (UTC): {datetime.fromtimestamp(report['started_at'], timezone.utc).isoformat()}\n"
         f"Duración: {report['finished_at'] - report['started_at']:.3f} s\n"
@@ -47,13 +50,15 @@ def build_message(report_path, sender, recipients):
         summary += "Captura: no disponible (no se llegó a crear el navegador o no respondió).\n"
     for error in report.get("screenshot_errors", []):
         summary += f"Error de captura: {error}\n"
-    message.set_content(summary + "\nLogs completos de la petición:\n\n" + logs)
+    heading = "Ejecución programada fallida del scraper" if task else "Petición fallida del scraper"
+    log_heading = "Logs completos de la ejecución" if task else "Logs completos de la petición"
+    message.set_content(summary + "\n" + log_heading + ":\n\n" + logs)
     images = "".join(f'<p><img alt="Captura del navegador al fallar" src="cid:{run_id}-{i}"></p>'
                      for i in range(len(screenshots)))
     message.add_alternative(
-        "<html><body><h2>Petición fallida del scraper</h2><pre>"
+        "<html><body><h2>" + heading + "</h2><pre>"
         + html.escape(summary) + "</pre>" + images
-        + "<h3>Logs completos de la petición</h3><pre style='white-space:pre-wrap'>"
+        + "<h3>" + log_heading + "</h3><pre style='white-space:pre-wrap'>"
         + html.escape(logs) + "</pre></body></html>", subtype="html",
     )
     html_part = message.get_payload()[-1]
@@ -102,6 +107,14 @@ def process_pending(root, deliver=send_message, now=None):
             retry_file = pending.parent / "retry.json"
             retry = {}
             try:
+                report = json.loads(pending.read_text(encoding="utf-8"))
+                # Also suppress scanner reports queued by runtime versions before 0.4.
+                if (report.get("kind", "request") == "request"
+                        and report.get("status") in {404, 405}
+                        and report.get("matched_route") is not True):
+                    pending.rename(pending.parent / "ignored.json")
+                    retry_file.unlink(missing_ok=True)
+                    continue
                 retry = json.loads(retry_file.read_text()) if retry_file.exists() else {}
                 if retry.get("next_attempt", 0) > now:
                     continue
@@ -122,7 +135,7 @@ def process_pending(root, deliver=send_message, now=None):
                 temporary.replace(retry_file)
                 logging.exception("Could not deliver request report run_id=%s; will retry", pending.parent.name)
         retention = int(os.getenv("REQUEST_DIAGNOSTICS_RETENTION_DAYS", "7")) * 86400
-        for marker in root.glob("*/sent.json"):
+        for marker in (*root.glob("*/sent.json"), *root.glob("*/ignored.json")):
             if now - marker.stat().st_mtime > retention:
                 shutil.rmtree(marker.parent)
         # A killed worker may leave an unfinished log. Keep it for the same period.

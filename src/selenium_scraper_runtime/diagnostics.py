@@ -9,6 +9,7 @@ import shutil
 import time
 import uuid
 from pathlib import Path
+from contextlib import contextmanager
 
 from flask import request
 
@@ -68,11 +69,11 @@ def _request_secrets():
 
 
 class RequestReport:
-    def __init__(self, run_id, screenshot):
+    def __init__(self, run_id, screenshot, *, metadata=None, secrets=()):
         self.path = Path(os.environ["REQUEST_DIAGNOSTICS_DIR"]) / run_id
         self.path.mkdir(parents=True, exist_ok=False, mode=0o700)
         self.stream = (self.path / "request.log").open("x", encoding="utf-8")
-        self.secrets = _request_secrets()
+        self.secrets = sorted(set(secrets), key=len, reverse=True) if metadata is not None else _request_secrets()
         self.screenshot = screenshot or take_screenshot
         self.captured_drivers = set()
         self.finished = False
@@ -80,12 +81,14 @@ class RequestReport:
             "version": 1,
             "run_id": run_id,
             "service": os.getenv("SCRAPER_SERVICE_NAME", "selenium-scraper"),
-            "method": request.method,
-            "path": request.path,
             "started_at": time.time(),
             "screenshots": [],
             "screenshot_errors": [],
         }
+        self.metadata.update(metadata if metadata is not None else {
+            "kind": "request", "method": request.method, "path": request.path,
+            "matched_route": request.url_rule is not None,
+        })
 
     def redact(self, text):
         for secret in self.secrets:
@@ -107,6 +110,10 @@ class RequestLogHandler(logging.Handler):
         if report is None or report.finished:
             return
         try:
+            if report.metadata.get("kind") == "task" and record.levelno >= logging.ERROR:
+                message = report.redact(record.getMessage())
+                if message.strip("= -\n"):
+                    report.metadata["errors"].append(message)
             report.stream.write(report.redact(self.format(record)) + "\n")
             report.stream.flush()
         except Exception:
@@ -163,21 +170,9 @@ def finish_request(response=None, exception=None):
                     "Request completed status=%s error=%s", status, error if status >= 400 else "")
         if exception is not None:
             logging.error("Unhandled request exception", exc_info=(type(exception), exception, exception.__traceback__))
-        report.stream.flush()
-        os.fsync(report.stream.fileno())
-        report.stream.close()
-        report.finished = True
-        if status >= 400:
-            report.metadata.update(status=status, error=report.redact(error), finished_at=time.time())
-            # Only a fully written manifest is visible to the notification worker.
-            temporary = report.path / "report.tmp"
-            with temporary.open("x", encoding="utf-8") as output:
-                json.dump(report.metadata, output, ensure_ascii=False)
-                output.flush()
-                os.fsync(output.fileno())
-            temporary.rename(report.path / "pending.json")
-        else:
-            shutil.rmtree(report.path)
+        report.metadata.update(status=status, error=report.redact(error), finished_at=time.time())
+        failed = status >= 400 and not (status in {404, 405} and request.url_rule is None)
+        _finalize_report(report, failed)
     except Exception:
         logging.exception("Could not finalize request diagnostics")
 
@@ -190,3 +185,83 @@ def clear_request(exception=None):
     if token is not None:
         request._scraper_report_token = None
         current_report.reset(token)
+
+
+def _finalize_report(report, failed):
+    report.stream.flush()
+    os.fsync(report.stream.fileno())
+    report.stream.close()
+    report.finished = True
+    if not failed:
+        shutil.rmtree(report.path)
+        return
+    temporary = report.path / "report.tmp"
+    with temporary.open("x", encoding="utf-8") as output:
+        json.dump(report.metadata, output, ensure_ascii=False)
+        output.flush()
+        os.fsync(output.fileno())
+    temporary.rename(report.path / "pending.json")
+
+
+class TaskExecutionError(RuntimeError):
+    """A cycle returned after logging errors; it must not be counted as successful."""
+
+
+def raise_if_task_errors():
+    report = current_report.get()
+    if report is not None and report.metadata.get("kind") == "task" and report.metadata["errors"]:
+        raise TaskExecutionError("Task completed with logged errors: " + "; ".join(report.metadata["errors"]))
+
+
+@contextmanager
+def task_diagnostics(task, secrets=()):
+    """Isolate a cron/task execution without requiring a Flask request context."""
+    from .logging import configure_logging, run_id, _redact_sensitive_fields
+    from .metrics import TaskSkipped
+
+    configure_logging()
+    configure_diagnostics()
+    identifier = uuid.uuid4().hex
+    run_token = run_id.set(identifier)
+    report_token = None
+    report = None
+    outcome = "success"
+    error = ""
+    try:
+        if os.getenv("REQUEST_DIAGNOSTICS_DIR"):
+            try:
+                redacted = _redact_sensitive_fields(dict(os.environ))
+                protected = [value for key, value in os.environ.items()
+                             if value and redacted[key] == "[REDACTED]"]
+                report = RequestReport(identifier, None, secrets=(*protected, *secrets), metadata={
+                    "kind": "task", "task": task, "method": "TASK", "path": task,
+                    "errors": [],
+                })
+                report_token = current_report.set(report)
+            except Exception:
+                logging.exception("Could not start task diagnostics task=%s", task)
+        logging.info("Task started task=%s", task)
+        try:
+            yield report
+            raise_if_task_errors()
+        except TaskSkipped:
+            outcome = "skipped"
+            raise
+        except BaseException as exception:
+            outcome = "error"
+            error = str(exception) or type(exception).__name__
+            logging.exception("Task failed task=%s", task)
+            raise
+        finally:
+            logging.info("Task completed task=%s outcome=%s", task, outcome)
+            if report is not None:
+                report.metadata.update(outcome=outcome, status=outcome,
+                                       error=report.redact(error), finished_at=time.time())
+                try:
+                    _finalize_report(report, outcome == "error")
+                except Exception:
+                    logging.exception("Could not finalize task diagnostics task=%s", task)
+    finally:
+        if report_token is not None:
+            current_report.reset(report_token)
+        run_id.reset(run_token)

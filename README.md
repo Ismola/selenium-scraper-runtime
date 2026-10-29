@@ -93,3 +93,23 @@ retention; sent and abandoned evidence expires after
 `REQUEST_DIAGNOSTICS_RETENTION_DAYS` (7). Run the worker under a user that can read
 and update the scraper's private spool. `.heartbeat` is updated each scan; also
 monitor the age of pending reports to detect mail delivery problems.
+
+## Scheduled task failure evidence (v0.4)
+
+Use `@tracked_task("task_name", failure_diagnostics=True)` (or the equivalent
+`track_task` context manager) for cron/worker flows. Every cycle receives a new
+correlation ID. A failed cycle queues its complete logs, traceback and screenshots
+in the same durable spool used for HTTP errors, without needing a Flask context.
+Call `capture_failure(driver)` before closing a failed browser. Caught extraction
+errors should log at ERROR with their traceback and capture at the failing step;
+`raise_if_task_errors()` at the end of a cycle ensures cleanup and failure metrics.
+An opt-in cycle that logs ERROR is reported as failed even if the caller swallowed
+the exception. Successful or intentionally skipped cycles log their outcome but do
+not send email. Environment credentials and explicitly supplied `secrets=` values
+are redacted, and parallel cycles retain separate reports.
+
+Unmatched HTTP routes (404) and disallowed methods (405) never queue email reports.
+A legitimate endpoint returning 404 still does. The notification worker also
+ignores legacy 404/405 scanner reports queued before this version; these are
+marked `ignored.json` and expire under the normal retention policy. This filter
+does not suppress business failures, HTTP 5xx, or scheduled task failures.

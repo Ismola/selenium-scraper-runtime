@@ -128,7 +128,7 @@ class TaskSkipped(Exception):
 
 
 @contextmanager
-def track_task(task):
+def _track_task_metrics(task):
     """Track scheduled or internal work that does not pass through Flask."""
     started = time.monotonic()
     started_at = time.time()
@@ -162,12 +162,23 @@ def track_task(task):
             TASK_LAST_SUCCESS.labels(service=SERVICE_NAME, task=task).set(finished_at)
 
 
-def tracked_task(task):
+@contextmanager
+def track_task(task, *, failure_diagnostics=False, secrets=()):
+    with _track_task_metrics(task):
+        if failure_diagnostics:
+            from .diagnostics import task_diagnostics
+            with task_diagnostics(task, secrets=secrets):
+                yield
+        else:
+            yield
+
+
+def tracked_task(task, *, failure_diagnostics=False, secrets=()):
     """Decorator form of :func:`track_task` for scheduler callbacks."""
     def decorator(function):
         @wraps(function)
         def wrapped(*args, **kwargs):
-            with track_task(task):
+            with track_task(task, failure_diagnostics=failure_diagnostics, secrets=secrets):
                 return function(*args, **kwargs)
 
         return wrapped
